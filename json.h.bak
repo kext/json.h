@@ -1,0 +1,204 @@
+// json.h by Lukas Joeressen.
+// Licensed under CC0-1.0.
+// https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+#ifndef JSON_HEADER
+#define JSON_HEADER
+
+// Configure the number type used by json.h.
+#ifndef JSON_NUMBER
+#define JSON_NUMBER double
+#endif
+// Configure if strings should be zero terminated.
+#ifndef JSON_ZERO_TERMINATE
+#define JSON_ZERO_TERMINATE 1
+#endif
+// Configure how many bytes should be used for size.
+// The maximum object size is 2^(8 * JSON_SIZE_BYTES - 3).
+#ifndef JSON_SIZE_BYTES
+#define JSON_SIZE_BYTES 3
+#endif
+
+// Includes for integer definitions.
+#include <stddef.h>
+#include <stdint.h>
+// Include for memcpy, memcmp and strlen.
+#include <string.h>
+
+// Pointer to the start of a JSON value.
+typedef const uint8_t *JsonValue;
+// Typedef for the number type.
+typedef JSON_NUMBER JsonNumber;
+
+// Parse a zero terminated JSON string into a JsonValue buffer.
+// Returns zero on success and stores the used size of the buffer back into length.
+// If an error occurs, an error code is returned and length contains the position of the error.
+int json_parse(const char *json, uint8_t *buffer, size_t *length);
+
+// Convert a JSON value to a string.
+// Returns zero on success or an error code.
+// Length contains the length of the resulting string if the buffer was large enough.
+// If there is space left in the buffer, the string will be zero terminated.
+int json_stringify(JsonValue v, char *buffer, size_t *length);
+
+// Check if a JSON value is null.
+int json_is_null(JsonValue v);
+
+// Check if a JSON value is either true or false.
+int json_is_boolean(JsonValue v);
+// Check if a JSON value is true.
+int json_is_true(JsonValue v);
+// Check if a JSON value is false.
+int json_is_false(JsonValue v);
+
+// Check if a JSON value is an object.
+int json_is_object(JsonValue v);
+
+JsonValue json_object_get(JsonValue v, const char *key);
+
+typedef struct {
+  JsonValue object;
+  JsonValue key;
+  JsonValue value;
+} JsonObjectIterator;
+
+int json_object_iterator_init(JsonObjectIterator *i, JsonValue v);
+int json_object_iterator_next(JsonObjectIterator *i);
+
+int json_is_array(JsonValue v);
+JsonValue json_array_get(JsonValue v, int index);
+
+typedef struct {
+  JsonValue array;
+  JsonValue value;
+  int index;
+} JsonArrayIterator;
+
+int json_is_string(JsonValue v);
+const char *json_string_get(JsonValue v, size_t *length);
+
+int json_is_number(JsonValue v);
+JsonNumber json_number_get(JsonValue v);
+
+#endif
+
+#ifdef JSON_IMPLEMENTATION
+#undef JSON_IMPLEMENTATION
+
+#define JSON__UNDEFINED 0
+#define JSON__NULL 1
+#define JSON__FALSE 2
+#define JSON__TRUE 3
+#define JSON__NUMBER 4
+#define JSON__STRING 5
+#define JSON__OBJECT 6
+#define JSON__ARRAY 7
+
+static size_t json__read_marker(const uint8_t *x)
+{
+  int i;
+  size_t r = 0;
+  for (i = 0; i < JSON_SIZE_BYTES; ++i) {
+    if (__builtin_mul_overflow(r, 256, &r)) return 0;
+    if (__builtin_add_overflow(r, x[JSON_SIZE_BYTES - i - 1], &r)) return 0;
+  }
+  return r;
+}
+
+static int json__type(size_t s)
+{
+  return s & 7;
+}
+
+static size_t json__size(size_t s)
+{
+  return s >> 3;
+}
+
+int json_is_null(JsonValue v)
+{
+  return json__type(json__read_marker(v)) == JSON__NULL;
+}
+
+int json_is_boolean(JsonValue v)
+{
+  return (json__type(json__read_marker(v)) | 1) == JSON__TRUE;
+}
+
+int json_is_true(JsonValue v)
+{
+  return json__type(json__read_marker(v)) == JSON__TRUE;
+}
+
+int json_is_false(JsonValue v)
+{
+  return json__type(json__read_marker(v)) == JSON__FALSE;
+}
+
+int json_is_object(JsonValue v)
+{
+  return json__type(json__read_marker(v)) == JSON__OBJECT;
+}
+
+int json_is_array(JsonValue v)
+{
+  return json__type(json__read_marker(v)) == JSON__ARRAY;
+}
+
+int json_is_string(JsonValue v)
+{
+  return json__type(json__read_marker(v)) == JSON__STRING;
+}
+
+int json_is_number(JsonValue v)
+{
+  return json__type(json__read_marker(v)) == JSON__NUMBER;
+}
+
+int json_object_iterator_init(JsonObjectIterator *i, JsonValue v)
+{
+  int o = json_is_object(v);
+  i->object = o ? v : 0;
+  i->key = 0;
+  i->value = 0;
+  return o - 1;
+}
+
+int json_object_iterator_next(JsonObjectIterator *i)
+{
+  size_t so, s;
+  if (i->object == 0) return 0;
+  so = json__size(json__read_marker(i->object));
+  if (i->key == 0 || i->value == 0) {
+    if (so == 0) return 0;
+    // Get first element.
+    i->key = i->object + JSON_SIZE_BYTES;
+    s = json__size(json__read_marker(i->key));
+    i->value = i->key + s + JSON_SIZE_BYTES;
+    return 1;
+  } else {
+    s = json__size(json__read_marker(i->value));
+    if (i->object + so <= i->value + s) {
+      i->key = 0;
+      i->value = 0;
+      return 0;
+    } else {
+      i->key = i->value + s + JSON_SIZE_BYTES;
+      s = json__size(json__read_marker(i->key));
+      i->value = i->key + s + JSON_SIZE_BYTES;
+      return 1;
+    }
+  }
+}
+
+const char *json_string_get(JsonValue v, size_t *length)
+{
+  if (!v) return 0;
+  size_t s = json__read_marker(v);
+  if (json__type(s) != JSON__STRING) return 0;
+  s = json__size(s);
+  if (length) *length = s - JSON_ZERO_TERMINATE;
+  return (const char *) (v + JSON_SIZE_BYTES);
+}
+
+#endif

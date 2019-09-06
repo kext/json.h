@@ -1,0 +1,16 @@
+exe = .exe
+cc = gcc
+flags = -Wall -Wextra -Os
+
+rule compile
+  description = Compiling
+  command = $cc -MMD -MF $out.d -o $out $in $flags
+  depfile = $out.d
+  deps = gcc
+
+rule run-test
+  description = Test
+  command = ./$in
+
+build test$exe: compile test.c
+build test~: run-test test$exe
