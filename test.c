@@ -7,16 +7,19 @@ int main()
 {
   uint8_t memory[8192];
   size_t l = sizeof(memory);
-  JsonArena a[1];
-  json_arena_init(a, memory, l);
-  //JsonValue v = json_parse("{\"key\":[\"value\",1,true,false,null]}", memory, &l);
-  JsonValue v = json_object_new(a);
-  json_object_set(a, v, "true", JSON_TRUE);
-  json_object_set(a, v, "false", JSON_FALSE);
-  json_object_set(a, v, "null", JSON_NULL);
+  JsonArena arena[1];
+  json_arena_init(arena, memory, l);
+  //JsonValue object = json_parse("{\"key\":[\"value\",1,true,false,null]}", memory, &l);
+  JsonValue array = json_array_new(arena);
+  json_array_push(arena, array, json_string("value"));
+  json_array_push(arena, array, json_number_new(arena, 1));
+  json_array_push(arena, array, JSON_TRUE);
+  json_array_push(arena, array, JSON_FALSE);
+  json_array_push(arena, array, JSON_NULL);
+  JsonValue object = json_object_new(arena);
+  json_object_append(arena, object, "key", array);
   char s[1024];
-  size_t slen = sizeof(s);
-  json_stringify(json_object_get(v, "true"), s, &slen);
+  json_stringify(object, s, sizeof(s));
 
   printf("%s\n", s);
 }
