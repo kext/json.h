@@ -14,8 +14,8 @@ typedef int32_t JsonNumber;
 // A JsonValue is an annotated pointer to a 4-byte aligned struct.
 // That leaves the two least significant bits as tag.
 // Also null pointers have special meaning.
-// xxx..xx00 Number/Undefined
-// xxx..xx01 String/True
+// xxx..xx00 String/Undefined
+// xxx..xx01 Number/True
 // xxx..xx10 Object/False
 // xxx..xx11 Array/Null
 typedef uintptr_t JsonValue;
@@ -39,10 +39,18 @@ int json_arena_init(JsonArena *arena, uint8_t *buffer, size_t length);
 // Allocate size bytes from the arena allocator.
 void *json_arena_alloc(JsonArena *arena, size_t size);
 
-// Parse a zero terminated JSON string into a JsonValue buffer.
-// Returns the parsed JsonValue on success and stores the used size of the buffer back into length.
-// If an error occurs, 0 is returned and length contains the position of the error.
-JsonValue json_parse(const char *json, uint8_t *buffer, size_t *length);
+// Get the current position of the arena.
+// If the position is later passed to restore, all objects allocated after the call to
+// json_arena_save are freed.
+size_t json_arena_save(JsonArena *arena);
+
+// Restore the arena to a previous state.
+void json_arena_restore(JsonArena *arena, size_t position);
+
+// Parse a JSON string into a JsonValue.
+// Returns the position after the parsed value.
+// If an error occurs, 0 is returned.
+const char *json_parse(const char *json, JsonArena *arena, JsonValue *result);
 
 // Convert a JSON value to a string.
 // Returns the number of bytes used excluding the zero terminator or 0 on error.
@@ -196,6 +204,16 @@ void *json_arena_alloc(JsonArena *arena, size_t size)
   return r;
 }
 
+size_t json_arena_save(JsonArena *arena)
+{
+  return arena->heap;
+}
+
+void json_arena_restore(JsonArena *arena, size_t position)
+{
+  arena->heap = position;
+}
+
 int json_is_null(JsonValue v)
 {
   return v == JSON_NULL;
@@ -218,12 +236,12 @@ int json_is_false(JsonValue v)
 
 int json_is_number(JsonValue v)
 {
-  return (v & 3) == JSON_UNDEFINED && v > 3;
+  return (v & 3) == JSON_TRUE && v > 3;
 }
 
 int json_is_string(JsonValue v)
 {
-  return (v & 3) == JSON_TRUE && v > 3;
+  return (v & 3) == JSON_UNDEFINED && v > 3;
 }
 
 int json_is_object(JsonValue v)
@@ -262,7 +280,7 @@ const char *json_string_get(JsonValue v)
 JsonValue json_string(const char *s)
 {
   if (!s || ((JsonValue) s) & 3) return JSON_UNDEFINED;
-  return (JsonValue) s | JSON_TRUE;
+  return (JsonValue) s | JSON_UNDEFINED;
 }
 
 JsonObjectIterator json_object_iterator(JsonValue object)
@@ -301,7 +319,7 @@ JsonValue json_number_new(JsonArena *arena, JsonNumber number)
   JsonNumber *n = json_arena_alloc(arena, sizeof(*n));
   if (!n) return JSON_UNDEFINED;
   *n = number;
-  return (JsonValue) n | JSON_UNDEFINED;
+  return (JsonValue) n | JSON_TRUE;
 }
 
 JsonValue json_object_new(JsonArena *arena)
@@ -559,6 +577,209 @@ size_t json_stringify(JsonValue v, char *buffer, size_t length)
     if (length > 0) buffer[0] = 0;
   }
   return r;
+}
+
+static const char *json__skip_whitespace(const char *json)
+{
+  if (!json) return 0;
+  while (*json == ' ' || *json == '\t' || *json == '\r' || *json == '\n') {
+    ++json;
+  }
+  return json;
+}
+
+static const char *json__parse_simple(const char *json, JsonValue *result)
+{
+  if (json[0] == 't' && json[1] == 'r' && json[2] == 'u' && json[3] == 'e') {
+    if (result) *result = JSON_TRUE;
+    return json + 4;
+  } else if (json[0] == 'f' && json[1] == 'a' && json[2] == 'l' && json[3] == 's' && json[4] == 'e') {
+    if (result) *result = JSON_FALSE;
+    return json + 5;
+  } else if (json[0] == 'n' && json[1] == 'u' && json[2] == 'l' && json[3] == 'l') {
+    if (result) *result = JSON_NULL;
+    return json + 4;
+  } else {
+    return 0;
+  }
+}
+
+static const char *json__parse_string(const char *json, JsonArena *arena, const char **result)
+{
+  size_t l = 0;
+  char c;
+  if (arena->heap + 1 > arena->stack) return 0;
+  // Opening quote.
+  ++json;
+  while ((c = *json) != '"') {
+    if (c < 32) return 0;
+    if (arena->heap + l + 2 > arena->stack) return 0;
+    if (c == '\\') {
+      ++json;
+      switch (*json) {
+      case '\\':
+        c = '\\';
+        break;
+      case 't':
+        c = '\t';
+        break;
+      case 'r':
+        c = '\r';
+        break;
+      case 'n':
+        c = '\n';
+        break;
+      default:
+        return 0;
+      }
+    }
+    arena->buffer[arena->heap + l++] = c;
+    ++json;
+  }
+  ++json;
+  // Zero terminate and update arena.
+  arena->buffer[arena->heap + l] = 0;
+  l += 1;
+  while (l & (JSON__ALIGNMENT - 1)) {
+    l += 1;
+  }
+  if (arena->heap + l > arena->stack) return 0;
+  if (result) *result = (const char *) (arena->buffer + arena->heap);
+  arena->heap += l;
+  return json;
+}
+
+static int json__is_digit(char c)
+{
+  return '0' <= c && c <= '9';
+}
+
+static const char *json__parse_number(const char *json, JsonArena *arena, JsonValue *result)
+{
+  JsonNumber n = 0;
+  int negative = 0;
+  if (*json == '+') {
+    ++json;
+  } else if (*json == '-') {
+    negative = 1;
+    ++json;
+  }
+  if (!json__is_digit(*json)) return 0;
+  while (json__is_digit(*json)) {
+    if (json__builtin_mul_overflow(n, 10, &n)) return 0;
+    if (negative) {
+      if (json__builtin_sub_overflow(n, *json - '0', &n)) return 0;
+    } else {
+      if (json__builtin_add_overflow(n, *json - '0', &n)) return 0;
+    }
+    ++json;
+  }
+  if (result) {
+    *result = json_number_new(arena, n);
+    if (*result == JSON_UNDEFINED) return 0;
+  }
+  return json;
+}
+
+static const char *json__parse_object(const char *json, JsonArena *arena, JsonValue *result)
+{
+  size_t position = json_arena_save(arena);
+  JsonValue object = json_object_new(arena);
+  const char *k;
+  JsonValue v;
+  int start = 1;
+  // Skip opening brace and whitespace.
+  json = json__skip_whitespace(json + 1);
+  while (1) {
+    if (*json == '}') {
+      if (result) *result = object;
+      return json + 1;
+    }
+    if (!start) {
+      if (*json != ',') goto fail;
+      json = json__skip_whitespace(json + 1);
+    }
+    json = json__parse_string(json, arena, &k);
+    if (!json) goto fail;
+    json = json__skip_whitespace(json);
+    if (*json != ':') goto fail;
+    json = json__skip_whitespace(json + 1);
+    json = json_parse(json, arena, &v);
+    if (!json) goto fail;
+    if (json_object_append(arena, object, k, v)) goto fail;
+    json = json__skip_whitespace(json);
+    start = 0;
+  }
+fail:
+  json_arena_restore(arena, position);
+  return 0;
+}
+
+static const char *json__parse_array(const char *json, JsonArena *arena, JsonValue *result)
+{
+  size_t position = json_arena_save(arena);
+  JsonValue array = json_array_new(arena);
+  JsonValue v;
+  int start = 1;
+  // Skip opening bracket and whitespace.
+  json = json__skip_whitespace(json + 1);
+  while (1) {
+    if (*json == ']') {
+      if (result) *result = array;
+      return json + 1;
+    }
+    if (!start) {
+      if (*json != ',') goto fail;
+      json = json__skip_whitespace(json + 1);
+    }
+    json = json_parse(json, arena, &v);
+    if (!json) goto fail;
+    if (json_array_push(arena, array, v)) goto fail;
+    json = json__skip_whitespace(json);
+    start = 0;
+  }
+fail:
+  json_arena_restore(arena, position);
+  return 0;
+}
+
+const char *json__parse_string_value(const char *json, JsonArena *arena, JsonValue *result)
+{
+  const char *s, *r = json__parse_string(json, arena, &s);
+  if (!r) return 0;
+  if (result) *result = json_string(s);
+  return r;
+}
+
+const char *json_parse(const char *json, JsonArena *arena, JsonValue *result)
+{
+  switch (*json) {
+  case '{':
+    return json__parse_object(json, arena, result);
+  case '[':
+    return json__parse_array(json, arena, result);
+  case '"':
+    return json__parse_string_value(json, arena, result);
+  case 't':
+  case 'f':
+  case 'n':
+    return json__parse_simple(json, result);
+  case '+':
+  case '-':
+  case '0':
+  case '1':
+  case '2':
+  case '3':
+  case '4':
+  case '5':
+  case '6':
+  case '7':
+  case '8':
+  case '9':
+    return json__parse_number(json, arena, result);
+  default:
+    return 0;
+  }
 }
 
 #endif
