@@ -538,12 +538,21 @@ static size_t json__stringify_number(JsonNumber number, char *buffer, size_t len
 {
   size_t n = 0;
   int negative = 0;
+  JsonNumber num;
   if (number < 0) {
-    if (length < 2 || json__builtin_sub_overflow(0, number, &number)) return 0;
+    if (length < 2) return 0;
     buffer[0] = '-';
     ++buffer;
     --length;
     negative = 1;
+    if (json__builtin_sub_overflow(0, number, &num)) {
+      // If this overflows, the last digit is greater than 0.
+      number += 1;
+      buffer[n++] = '1' + (-number) % 10;
+      number = (-number) / 10;
+    } else {
+      number = num;
+    }
   }
   do {
     if (length < n + 2) return 0;

@@ -25,7 +25,7 @@ int main()
   printf("%s\n", s);
 
   JsonValue v = JSON_UNDEFINED;
-  const char *json = "[1, 2, 3, \"655\\r\\n\\\\36\"]\n{\"key\":\n[\"value\",1,true,false,null]}";
+  const char *json = "[1, 2, 3, \"655\\r\\n\\\\36\"]\n{\"key\":\n[\"value\",-2147483647,-2147483648,true,false,null]}";
   while ((json = json_parse(json, arena, &v))) {
     json_stringify(v, s, sizeof(s));
     printf("%s\n", s);
