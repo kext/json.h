@@ -95,6 +95,9 @@ int json_is_array(JsonValue v);
 // Create a new number.
 JsonValue json_number_new(JsonArena *arena, JsonNumber number);
 
+// Create a number owned by the calling code.
+JsonValue json_number_extern(const JsonNumber *number);
+
 // Create a new object.
 JsonValue json_object_new(JsonArena *arena);
 
@@ -117,7 +120,28 @@ int json_array_push(JsonArena *arena, JsonValue array, JsonValue value);
 // Get the element at the given index.
 JsonValue json_array_get(JsonValue array, int index);
 
-// Opaque iterator over an object.
+// Json Objects.
+struct JsonObject {
+  struct JsonObjectEntry *first;
+  struct JsonObjectEntry *last;
+};
+struct JsonObjectEntry {
+  struct JsonObjectEntry *next;
+  const char *key;
+  JsonValue value;
+};
+
+// Json Arrays.
+struct JsonArray {
+  struct JsonArrayElement *first;
+  struct JsonArrayElement *last;
+};
+struct JsonArrayElement {
+  struct JsonArrayElement *next;
+  JsonValue value;
+};
+
+// Iterator over an object.
 typedef struct JsonObjectEntry *JsonObjectIterator;
 // Get an iterator for an object.
 JsonObjectIterator json_object_iterator(JsonValue v);
@@ -125,7 +149,7 @@ JsonObjectIterator json_object_iterator(JsonValue v);
 // key or value may be null if unneeded.
 int json_object_next(JsonObjectIterator *i, const char **key, JsonValue *value);
 
-// Opaque iterator over an array.
+// Iterator over an array.
 typedef struct JsonArrayElement *JsonArrayIterator;
 // Get an iterator for an array.
 JsonArrayIterator json_array_iterator(JsonValue v);
@@ -147,27 +171,6 @@ int json_array_next(JsonArrayIterator *i, JsonValue *value);
 #define json__builtin_mul_overflow __builtin_mul_overflow
 
 #define JSON__ALIGNMENT (sizeof(void *) < 4 ? 4 : sizeof(void *))
-
-// Json Objects.
-struct JsonObject {
-  struct JsonObjectEntry *first;
-  struct JsonObjectEntry *last;
-};
-struct JsonObjectEntry {
-  struct JsonObjectEntry *next;
-  const char *key;
-  JsonValue value;
-};
-
-// Json Arrays.
-struct JsonArray {
-  struct JsonArrayElement *first;
-  struct JsonArrayElement *last;
-};
-struct JsonArrayElement {
-  struct JsonArrayElement *next;
-  JsonValue value;
-};
 
 int json_arena_init(JsonArena *arena, uint8_t *buffer, size_t length)
 {
@@ -262,7 +265,7 @@ static void *json__pointer(JsonValue v)
 JsonNumber json_number_get(JsonValue v)
 {
   if (json_is_number(v)) {
-    return *((JsonNumber *) json__pointer(v));
+    return *((const JsonNumber *) json__pointer(v));
   } else {
     return 0;
   }
@@ -320,6 +323,12 @@ JsonValue json_number_new(JsonArena *arena, JsonNumber number)
   if (!n) return JSON_UNDEFINED;
   *n = number;
   return (JsonValue) n | JSON_TRUE;
+}
+
+JsonValue json_number_extern(const JsonNumber *number)
+{
+  if (!number) return JSON_UNDEFINED;
+  return (JsonValue) number | JSON_TRUE;
 }
 
 JsonValue json_object_new(JsonArena *arena)
