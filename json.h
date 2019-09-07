@@ -621,13 +621,19 @@ static const char *json__parse_string(const char *json, JsonArena *arena, const 
   // Opening quote.
   ++json;
   while ((c = *json) != '"') {
-    if (c < 32) return 0;
+    if ((c & 255) < 32) return 0;
     if (arena->heap + l + 2 > arena->stack) return 0;
     if (c == '\\') {
       ++json;
       switch (*json) {
+      case '"':
+        c = '"';
+        break;
       case '\\':
         c = '\\';
+        break;
+      case '/':
+        c = '/';
         break;
       case 't':
         c = '\t';
@@ -637,6 +643,12 @@ static const char *json__parse_string(const char *json, JsonArena *arena, const 
         break;
       case 'n':
         c = '\n';
+        break;
+      case 'b':
+        c = '\b';
+        break;
+      case 'f':
+        c = '\f';
         break;
       default:
         return 0;
