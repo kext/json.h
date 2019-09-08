@@ -80,8 +80,12 @@ JsonNumber json_number_get(JsonValue v);
 // Get the data of a string or a null pointer if not a string.
 const char *json_string_get(JsonValue v);
 
-// Create a JsonValue from a string.
-JsonValue json_string(const char *s);
+// Create a new string value. The content is copied into the arena.
+JsonValue json_string_new(JsonArena *arena, const char *s);
+
+// Create a JsonValue from a string without taking ownership.
+// The string must begin at a 4-byte aligned address.
+JsonValue json_string_extern(const char *s);
 
 // Check if a JSON value is an string.
 int json_is_string(JsonValue v);
@@ -280,10 +284,20 @@ const char *json_string_get(JsonValue v)
   }
 }
 
-JsonValue json_string(const char *s)
+JsonValue json_string_extern(const char *s)
 {
   if (!s || ((JsonValue) s) & 3) return JSON_UNDEFINED;
   return (JsonValue) s | JSON_UNDEFINED;
+}
+
+JsonValue json_string_new(JsonArena *arena, const char *s)
+{
+  size_t l = strlen(s);
+  char *dst = json_arena_alloc(arena, l + 1);
+  if (!dst) return JSON_UNDEFINED;
+  memcpy(dst, s, l);
+  dst[l] = 0;
+  return json_string_extern(dst);
 }
 
 JsonObjectIterator json_object_iterator(JsonValue object)
@@ -777,7 +791,7 @@ const char *json__parse_string_value(const char *json, JsonArena *arena, JsonVal
 {
   const char *s, *r = json__parse_string(json, arena, &s);
   if (!r) return 0;
-  if (result) *result = json_string(s);
+  if (result) *result = json_string_extern(s);
   return r;
 }
 

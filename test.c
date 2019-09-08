@@ -10,7 +10,7 @@ int main()
   JsonArena arena[1];
   json_arena_init(arena, memory, l);
   JsonValue array = json_array_new(arena);
-  json_array_push(arena, array, json_string("value"));
+  json_array_push(arena, array, json_string_new(arena, "value"));
   json_array_push(arena, array, json_number_new(arena, -1));
   json_array_push(arena, array, JSON_TRUE);
   json_array_push(arena, array, JSON_FALSE);
